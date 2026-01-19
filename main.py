@@ -94,6 +94,8 @@ from governance.owner_principles import (
     get_closing_thought,
     check_confirmation_status
 )
+from governance.governance_gate import governance_gate, GovernanceDecision
+from middleware.audit_middleware import AuditMiddleware
 
 logger = get_logger(__name__)
 execution_logger = get_execution_logger()
@@ -103,7 +105,7 @@ import asyncio
 import importlib
 import json
 import redis
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from pathlib import Path
@@ -124,19 +126,32 @@ mongo_client = MongoDBClient()
 redis_service = RedisService()
 sio = socketio.AsyncClient()
 
+# Initialize audit middleware
+audit_middleware = AuditMiddleware(mongo_client.db if mongo_client else None)
+
 # Redis client setup
 redis_client = None
 try:
     redis_host = os.getenv("REDIS_HOST", "localhost")
     redis_port = int(os.getenv("REDIS_PORT", 6379))
-    redis_client = redis.Redis(
-        host=redis_host,
-        port=redis_port,
-        decode_responses=True,
-        socket_timeout=5,
-        socket_connect_timeout=5,
-        retry_on_timeout=True
-    )
+    redis_password = os.getenv("REDIS_PASSWORD", None)
+    redis_username = os.getenv("REDIS_USERNAME", None)
+    
+    redis_config = {
+        "host": redis_host,
+        "port": redis_port,
+        "decode_responses": True,
+        "socket_timeout": 5,
+        "socket_connect_timeout": 5,
+        "retry_on_timeout": True
+    }
+    
+    if redis_password:
+        redis_config["password"] = redis_password
+    if redis_username:
+        redis_config["username"] = redis_username
+    
+    redis_client = redis.Redis(**redis_config)
     redis_client.ping()
     logger.info(f"Connected to Redis at {redis_host}:{redis_port}")
 except (redis.ConnectionError, redis.RedisError) as e:
@@ -224,10 +239,17 @@ async def health_check():
     health_status = {
         "status": "healthy",
         "bucket_version": BUCKET_VERSION,
+        "governance": {
+            "gate_active": True,
+            "approved_integrations": len(governance_gate.approved_integrations),
+            "certification": "enterprise_ready",
+            "certification_date": "2026-01-19"
+        },
         "services": {
             "mongodb": "connected" if mongo_client and mongo_client.db is not None else "disconnected",
             "socketio": "disabled",
-            "redis": "connected" if redis_service.is_connected() else "disconnected"
+            "redis": "connected" if redis_service.is_connected() else "disconnected",
+            "audit_middleware": "active" if audit_middleware.audit_collection is not None else "inactive"
         }
     }
 
@@ -1090,6 +1112,316 @@ async def validate_principle(
 async def check_confirmation(checklist_responses: Dict):
     """Check if all checklist items are confirmed"""
     return check_confirmation_status(checklist_responses)
+
+# Governance Gate Endpoints (Enterprise Production Lock)
+@app.post("/governance/gate/validate-integration")
+async def validate_integration_request(
+    integration_id: str = Query(..., description="Unique integration identifier"),
+    integration_type: str = Query(..., description="Type of integration"),
+    artifact_classes: List[str] = Query(..., description="Artifact classes to use"),
+    product_name: str = Query(..., description="Product name"),
+    data_schema: Dict = None
+):
+    """Validate integration request through governance gate"""
+    if not data_schema:
+        raise HTTPException(status_code=400, detail="data_schema required")
+    
+    result = await governance_gate.validate_integration(
+        integration_id=integration_id,
+        integration_type=integration_type,
+        artifact_classes=artifact_classes,
+        data_schema=data_schema,
+        product_name=product_name
+    )
+    
+    if result["decision"] == GovernanceDecision.REJECTED.value:
+        raise HTTPException(status_code=403, detail={
+            "message": "Integration rejected by governance gate",
+            "reasons": result["reasons"],
+            "threats": result.get("threats_found", [])
+        })
+    
+    return result
+
+@app.post("/governance/gate/validate-operation")
+async def validate_operation_request(
+    operation_type: str = Query(..., description="Operation type (CREATE/READ/UPDATE/DELETE)"),
+    artifact_class: str = Query(..., description="Artifact class"),
+    data_size: int = Query(..., description="Data size in bytes"),
+    integration_id: str = Query(..., description="Integration ID")
+):
+    """Validate operation through governance gate"""
+    
+    result = governance_gate.validate_operation(
+        operation_type=operation_type,
+        artifact_class=artifact_class,
+        data_size=data_size,
+        integration_id=integration_id
+    )
+    
+    if not result["allowed"]:
+        raise HTTPException(status_code=403, detail={
+            "message": "Operation not allowed",
+            "reason": result["reason"]
+        })
+    
+    return {"allowed": True, "message": "Operation validated"}
+
+@app.get("/governance/gate/scale-limits")
+async def get_scale_limits():
+    """Get current scale limits (doc 15)"""
+    from governance.governance_gate import SCALE_LIMITS
+    return {
+        "limits": SCALE_LIMITS,
+        "description": "Scale limits enforced by governance gate",
+        "reference": "docs/15_scale_readiness.md"
+    }
+
+@app.get("/governance/gate/product-rules")
+async def get_product_rules():
+    """Get product safety rules (doc 16)"""
+    from governance.governance_gate import PRODUCT_RULES
+    return {
+        "rules": PRODUCT_RULES,
+        "description": "Product-specific artifact class rules",
+        "reference": "docs/16_multi_product_compatibility.md"
+    }
+
+@app.get("/governance/gate/operation-rules")
+async def get_operation_rules():
+    """Get operation rules for artifact classes (doc 04)"""
+    from governance.governance_gate import OPERATION_RULES
+    return {
+        "rules": OPERATION_RULES,
+        "description": "Allowed operations per artifact class",
+        "reference": "docs/04_artifact_admission.md"
+    }
+
+@app.get("/governance/gate/status")
+async def get_governance_gate_status():
+    """Get governance gate status and statistics"""
+    return {
+        "status": "active",
+        "approved_integrations": len(governance_gate.approved_integrations),
+        "enforcement_level": "production",
+        "certification": "enterprise_ready",
+        "reference": "docs/18_bucket_enterprise_certification.md"
+    }
+
+# Threat Model Endpoints
+@app.get("/governance/threats")
+async def get_all_threats():
+    """Get all threats from threat model (doc 14)"""
+    from utils.threat_validator import BucketThreatModel
+    return {
+        "threats": BucketThreatModel.get_all_threats(),
+        "total_threats": len(BucketThreatModel.THREATS),
+        "reference": "docs/14_bucket_threat_model.md"
+    }
+
+@app.get("/governance/threats/{threat_id}")
+async def get_threat_details(threat_id: str):
+    """Get details for a specific threat"""
+    from utils.threat_validator import BucketThreatModel
+    
+    threat = BucketThreatModel.get_threat(threat_id)
+    if not threat:
+        raise HTTPException(status_code=404, detail=f"Threat {threat_id} not found")
+    
+    return threat
+
+@app.post("/governance/threats/scan")
+async def scan_for_threats(data: Dict):
+    """Scan data for threat patterns"""
+    from utils.threat_validator import BucketThreatModel
+    
+    detected_threats = BucketThreatModel.scan_for_threats(data)
+    has_critical = BucketThreatModel.has_critical_threats(detected_threats)
+    
+    return {
+        "threats_detected": len(detected_threats),
+        "has_critical_threats": has_critical,
+        "threats": detected_threats,
+        "recommendation": "BLOCK" if has_critical else "ALLOW"
+    }
+
+@app.get("/governance/threats/pattern/{pattern}")
+async def find_threats_by_pattern(pattern: str):
+    """Find threats matching a detection pattern"""
+    from utils.threat_validator import BucketThreatModel
+    
+    matching_threats = BucketThreatModel.detect_threat_pattern(pattern)
+    
+    return {
+        "pattern": pattern,
+        "matching_threats": matching_threats,
+        "count": len(matching_threats)
+    }
+
+# Scale Limits Endpoints
+@app.get("/governance/scale/limits")
+async def get_detailed_scale_limits():
+    """Get detailed scale limits and performance targets (doc 15)"""
+    from config.scale_limits import get_scale_limits_dict, get_performance_targets_dict
+    
+    return {
+        "scale_limits": get_scale_limits_dict(),
+        "performance_targets": get_performance_targets_dict(),
+        "reference": "docs/15_scale_readiness.md",
+        "enforcement": "hard_limits",
+        "status": "production_active"
+    }
+
+@app.post("/governance/scale/validate")
+async def validate_scale_operation(
+    operation_type: str = Query(..., description="Operation type (read/write)"),
+    data_size: int = Query(..., description="Data size in bytes"),
+    frequency: int = Query(1, description="Operations per second")
+):
+    """Validate if operation is within scale limits"""
+    from config.scale_limits import validate_operation_scale
+    
+    is_valid, error_message = validate_operation_scale(operation_type, data_size, frequency)
+    
+    if not is_valid:
+        raise HTTPException(status_code=400, detail={
+            "message": "Operation exceeds scale limits",
+            "error": error_message,
+            "operation_type": operation_type,
+            "data_size": data_size,
+            "frequency": frequency
+        })
+    
+    return {
+        "valid": True,
+        "message": "Operation within scale limits",
+        "operation_type": operation_type,
+        "data_size": data_size,
+        "frequency": frequency
+    }
+
+@app.get("/governance/scale/proximity/{limit_name}")
+async def check_limit_proximity(
+    limit_name: str,
+    current_value: int = Query(..., description="Current metric value")
+):
+    """Check how close current value is to scale limit"""
+    from config.scale_limits import check_scale_limit_proximity
+    
+    result = check_scale_limit_proximity(current_value, limit_name)
+    
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    
+    return result
+
+@app.get("/governance/scale/what-scales")
+async def get_what_scales():
+    """Get information about what scales safely and what doesn't"""
+    from config.scale_limits import ScaleLimits
+    
+    limits = ScaleLimits()
+    
+    return {
+        "scales_safely": limits.SCALES_SAFELY,
+        "does_not_scale": limits.DOES_NOT_SCALE,
+        "never_assume": limits.NEVER_ASSUME,
+        "reference": "docs/15_scale_readiness.md"
+    }
+
+# Audit Middleware Endpoints
+@app.get("/audit/artifact/{artifact_id}")
+async def get_artifact_audit_history(
+    artifact_id: str,
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of records")
+):
+    """Get complete audit history for an artifact"""
+    history = await audit_middleware.get_artifact_history(artifact_id, limit)
+    return {
+        "artifact_id": artifact_id,
+        "history": history,
+        "count": len(history)
+    }
+
+@app.get("/audit/user/{requester_id}")
+async def get_user_audit_activities(
+    requester_id: str,
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of records")
+):
+    """Get all operations performed by a user"""
+    activities = await audit_middleware.get_user_activities(requester_id, limit)
+    return {
+        "requester_id": requester_id,
+        "activities": activities,
+        "count": len(activities)
+    }
+
+@app.get("/audit/recent")
+async def get_recent_audit_operations(
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of records"),
+    operation_type: Optional[str] = Query(None, description="Filter by operation type")
+):
+    """Get recent operations across all artifacts"""
+    operations = await audit_middleware.get_recent_operations(limit, operation_type)
+    return {
+        "operations": operations,
+        "count": len(operations),
+        "filter": {"operation_type": operation_type} if operation_type else None
+    }
+
+@app.get("/audit/failed")
+async def get_failed_audit_operations(
+    limit: int = Query(100, ge=1, le=1000, description="Maximum number of records")
+):
+    """Get recent failed operations for incident response"""
+    operations = await audit_middleware.get_failed_operations(limit)
+    return {
+        "failed_operations": operations,
+        "count": len(operations),
+        "severity": "high" if len(operations) > 10 else "normal"
+    }
+
+@app.post("/audit/validate-immutability/{artifact_id}")
+async def validate_artifact_immutability(artifact_id: str):
+    """Verify that artifact has not been modified since creation"""
+    is_immutable = await audit_middleware.validate_immutability(artifact_id)
+    return {
+        "artifact_id": artifact_id,
+        "is_immutable": is_immutable,
+        "status": "valid" if is_immutable else "violation_detected"
+    }
+
+@app.post("/audit/log")
+async def create_audit_log(
+    operation_type: str = Query(..., description="Operation type (CREATE/READ/UPDATE/DELETE)"),
+    artifact_id: str = Query(..., description="Artifact ID"),
+    requester_id: str = Query(..., description="User/system performing operation"),
+    integration_id: str = Query(..., description="Integration ID"),
+    data_before: Optional[Dict] = None,
+    data_after: Optional[Dict] = None,
+    status: str = Query("success", description="Operation status"),
+    error_message: Optional[str] = Query(None, description="Error message if failed")
+):
+    """Manually create an audit log entry"""
+    audit_id = await audit_middleware.log_operation(
+        operation_type=operation_type,
+        artifact_id=artifact_id,
+        requester_id=requester_id,
+        integration_id=integration_id,
+        data_before=data_before,
+        data_after=data_after,
+        status=status,
+        error_message=error_message
+    )
+    
+    if audit_id:
+        return {
+            "success": True,
+            "audit_id": audit_id,
+            "message": "Audit entry created successfully"
+        }
+    else:
+        raise HTTPException(status_code=503, detail="Audit service unavailable")
 
 # Law Agent Endpoints
 @app.post("/basic-query")
