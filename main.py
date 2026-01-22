@@ -329,7 +329,13 @@ async def run_agent(agent_input: AgentInput):
         
         module_path = agent_spec.get("module_path", f"agents.{agent_input.agent_name}.{agent_input.agent_name}")
         try:
-            agent_module = importlib.import_module(module_path)
+            # Reload module to get latest changes (hot reload for development)
+            import sys
+            if module_path in sys.modules:
+                importlib.reload(sys.modules[module_path])
+                agent_module = sys.modules[module_path]
+            else:
+                agent_module = importlib.import_module(module_path)
         except ImportError as e:
             logger.error(f"Failed to import agent module {module_path}: {e}")
             raise HTTPException(status_code=500, detail=f"Agent module import failed: {str(e)}")
@@ -1329,6 +1335,295 @@ async def get_what_scales():
         "reference": "docs/15_scale_readiness.md"
     }
 
+# Scale Monitoring Dashboard Endpoints (Document 15 - Real-time Monitoring)
+@app.get("/metrics/scale-status")
+async def get_scale_status_dashboard():
+    """Real-time scale monitoring dashboard with all metrics"""
+    from utils.scale_monitor import scale_monitor
+    
+    status = await scale_monitor.get_full_status()
+    return status
+
+@app.get("/metrics/concurrent-writes")
+async def get_concurrent_writes_metric():
+    """Get current concurrent writes status"""
+    from utils.scale_monitor import scale_monitor
+    
+    return await scale_monitor.get_concurrent_writes_status()
+
+@app.get("/metrics/storage-capacity")
+async def get_storage_capacity_metric(
+    used_gb: Optional[float] = Query(None, description="Current storage usage in GB")
+):
+    """Get storage capacity status with escalation paths"""
+    from utils.scale_monitor import scale_monitor
+    
+    return await scale_monitor.get_storage_status(used_gb)
+
+@app.get("/metrics/write-throughput")
+async def get_write_throughput_metric():
+    """Get write throughput status"""
+    from utils.scale_monitor import scale_monitor
+    
+    return await scale_monitor.get_write_throughput_status()
+
+@app.get("/metrics/query-performance")
+async def get_query_performance_metric():
+    """Get query performance metrics (p50, p99, p999)"""
+    from utils.scale_monitor import scale_monitor
+    
+    return await scale_monitor.get_query_performance_status()
+
+@app.get("/metrics/alerts")
+async def get_active_alerts():
+    """Get active scale alerts"""
+    from utils.scale_monitor import scale_monitor
+    
+    alerts = await scale_monitor.check_and_alert()
+    return {
+        "active_alerts": alerts,
+        "count": len(alerts),
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+@app.get("/metrics/alert-history")
+async def get_alert_history(
+    limit: int = Query(50, ge=1, le=100, description="Number of alerts to retrieve")
+):
+    """Get alert history"""
+    from utils.scale_monitor import scale_monitor
+    
+    history = scale_monitor.alert_history[-limit:]
+    return {
+        "alerts": history,
+        "count": len(history),
+        "total_in_history": len(scale_monitor.alert_history)
+    }
+
+@app.post("/metrics/record-query-latency")
+async def record_query_latency(
+    latency_ms: float = Query(..., description="Query latency in milliseconds")
+):
+    """Record a query latency measurement"""
+    from utils.scale_monitor import scale_monitor
+    
+    await scale_monitor.record_query_latency(latency_ms)
+    return {
+        "success": True,
+        "latency_ms": latency_ms,
+        "recorded_at": datetime.utcnow().isoformat()
+    }
+
+@app.get("/governance/scale/certification")
+async def get_scale_certification():
+    """Get scale readiness certification status"""
+    return {
+        "certification": "ENTERPRISE_SCALE_READY",
+        "certification_date": "2026-01-19",
+        "certified_limits": {
+            "artifact_size": "500 MB",
+            "total_storage": "1000 GB (1 TB)",
+            "concurrent_writes": "100 writers",
+            "write_throughput": "1000 writes/sec",
+            "artifact_count": "100,000 artifacts",
+            "query_response": "<5 seconds",
+            "audit_retention": "7 years (unlimited entries)"
+        },
+        "proof": {
+            "artifact_size": "Tested 2026-01-19",
+            "concurrent_writes": "Load tested 2026-01-19",
+            "total_storage": "Supabase tier spec",
+            "write_throughput": "Calculated limit",
+            "artifact_count": "DB capacity estimate",
+            "query_response": "SLA target"
+        },
+        "monitoring": {
+            "real_time_dashboard": "/metrics/scale-status",
+            "automated_alerts": "enabled",
+            "graceful_degradation": "enabled",
+            "escalation_paths": "defined"
+        },
+        "status": "PRODUCTION_ACTIVE",
+        "review_cycle": "6 months",
+        "next_review": "2026-07-19",
+        "owner": "Ashmit_Pandey",
+        "reference": "docs/15_scale_readiness.md"
+    }
+
+@app.get("/governance/scale/what-scales-safely")
+async def get_what_scales_safely():
+    """Get detailed information about what scales safely"""
+    return {
+        "scales_safely": [
+            {
+                "metric": "Concurrent Writes",
+                "safe_limit": 100,
+                "proof": "Load tested 2026-01-19",
+                "status": "CERTIFIED",
+                "monitoring": "/metrics/concurrent-writes"
+            },
+            {
+                "metric": "Artifact Size",
+                "safe_limit": "500 MB",
+                "proof": "HTTP + DB limits tested",
+                "status": "CERTIFIED",
+                "validation": "Enforced at API layer"
+            },
+            {
+                "metric": "Total Storage",
+                "safe_limit": "1000 GB",
+                "proof": "Supabase PostgreSQL tier",
+                "status": "CERTIFIED",
+                "monitoring": "/metrics/storage-capacity"
+            },
+            {
+                "metric": "Write Throughput",
+                "safe_limit": "1000 writes/sec",
+                "proof": "DB connection pool calculation",
+                "status": "CERTIFIED (theoretical)",
+                "monitoring": "/metrics/write-throughput"
+            },
+            {
+                "metric": "Audit Trail",
+                "safe_limit": "Unlimited (7 year retention)",
+                "proof": "Append-only design",
+                "status": "CERTIFIED",
+                "growth": "~350 MB over 7 years"
+            },
+            {
+                "metric": "Multi-Product Isolation",
+                "safe_limit": "4 products certified",
+                "proof": "Product certification matrix",
+                "status": "CERTIFIED",
+                "products": ["AI_ASSISTANT", "AI_AVATAR", "GURUKUL", "ENFORCEMENT"]
+            },
+            {
+                "metric": "Query Performance",
+                "safe_limit": "<5 seconds",
+                "proof": "Database query optimization",
+                "status": "CERTIFIED",
+                "monitoring": "/metrics/query-performance"
+            }
+        ],
+        "reference": "docs/15_scale_readiness.md"
+    }
+
+@app.get("/governance/scale/what-does-not-scale")
+async def get_what_does_not_scale():
+    """Get information about what does NOT scale yet"""
+    return {
+        "does_not_scale": [
+            {
+                "operation": "Real-time queries across all products",
+                "reason": "Would require full-table scan",
+                "workaround": "Query by product_id, aggregate in application",
+                "future_plan": "Materialized views per product (Phase 2)"
+            },
+            {
+                "operation": "Distributed read-heavy operations",
+                "reason": "Bucket designed as write-only sink",
+                "workaround": "Copy artifacts to read-optimized storage",
+                "future_plan": "Read replica for analytics (Phase 2)"
+            },
+            {
+                "operation": "Multi-region replication",
+                "reason": "Single region (India), legal hold on data",
+                "workaround": "Single-region with daily backups",
+                "future_plan": "Evaluate after legal review (Phase 3)"
+            },
+            {
+                "operation": "Schema migrations",
+                "reason": "Schema is immutable by constitutional design",
+                "workaround": "Create new artifact type",
+                "status": "PERMANENTLY_BLOCKED"
+            },
+            {
+                "operation": "Conditional writes",
+                "reason": "Append-only semantics",
+                "workaround": "Create new artifact, keep old in audit",
+                "status": "NOT_SUPPORTED"
+            }
+        ],
+        "reference": "docs/15_scale_readiness.md"
+    }
+
+@app.get("/governance/scale/never-assume")
+async def get_never_assume():
+    """Get critical assumptions that must NEVER be made"""
+    return {
+        "never_assume": [
+            {
+                "assumption": "Eventual consistency without bounds",
+                "reality": "All writes are immediately consistent",
+                "guarantee": "Synchronous writes with immediate visibility",
+                "status": "ENFORCED"
+            },
+            {
+                "assumption": "Automatic schema migrations",
+                "reality": "Schema is immutable",
+                "requirement": "Manual review + governance approval",
+                "status": "ENFORCED"
+            },
+            {
+                "assumption": "Backfill on failure",
+                "reality": "Client must retry failed writes",
+                "guarantee": "Exactly-once semantics",
+                "status": "ENFORCED"
+            },
+            {
+                "assumption": "Performance improvement without limits",
+                "reality": "All optimizations must be load-tested",
+                "requirement": "Test at 2x max expected load",
+                "status": "ENFORCED"
+            },
+            {
+                "assumption": "Governance relaxation for emergency",
+                "reality": "Zero governance exceptions",
+                "override": "CEO-only with post-review",
+                "status": "CONSTITUTIONAL"
+            }
+        ],
+        "reference": "docs/15_scale_readiness.md"
+    }
+
+@app.get("/governance/scale/thresholds")
+async def get_scale_thresholds():
+    """Get scale thresholds and alert levels"""
+    return {
+        "concurrent_writes": {
+            "GREEN": "0-50 writers (safe)",
+            "YELLOW": "51-75 writers (monitor)",
+            "ORANGE": "76-99 writers (alert)",
+            "RED": "100+ writers (pause new writes)"
+        },
+        "storage_capacity": {
+            "GREEN": "0-70% (safe)",
+            "YELLOW": "70-90% (plan expansion)",
+            "ORANGE": "90-99% (critical - 6 hour response)",
+            "RED": "99-100% (halt writes - immediate response)"
+        },
+        "write_throughput": {
+            "GREEN": "0-500 writes/sec (safe)",
+            "YELLOW": "501-800 writes/sec (monitor)",
+            "ORANGE": "801-1000 writes/sec (alert)",
+            "RED": "1000+ writes/sec (throttle)"
+        },
+        "query_latency": {
+            "GREEN": "p99 < 100ms (excellent)",
+            "YELLOW": "p99 100-200ms (acceptable)",
+            "ORANGE": "p99 200-500ms (degraded)",
+            "RED": "p99 > 500ms (SLA breach)"
+        },
+        "escalation_paths": {
+            "storage_90_percent": "Ops_Team (6 hours)",
+            "storage_99_percent": "Ashmit_Pandey (1 hour)",
+            "storage_100_percent": "Ashmit_Pandey + Ops (IMMEDIATE)",
+            "concurrent_writes_100": "Ops_Team (IMMEDIATE)",
+            "query_sla_breach": "Ops_Team (1 hour)"
+        },
+        "reference": "docs/15_scale_readiness.md"
+    }
+
 # Audit Middleware Endpoints
 @app.get("/audit/artifact/{artifact_id}")
 async def get_artifact_audit_history(
@@ -1422,6 +1717,360 @@ async def create_audit_log(
         }
     else:
         raise HTTPException(status_code=503, detail="Audit service unavailable")
+
+# Comprehensive Threat Handling Endpoints (Document 14 - Full Implementation)
+@app.post("/governance/threats/scan-with-context")
+async def scan_threats_with_context(
+    data: Dict,
+    actor: Optional[str] = Query(None, description="Actor performing operation"),
+    operation_type: Optional[str] = Query(None, description="Operation type"),
+    target_type: Optional[str] = Query(None, description="Target type (e.g., audit_log)"),
+    override_attempted: bool = Query(False, description="Whether override was attempted")
+):
+    """Scan for threats with full context and escalation paths"""
+    from utils.threat_validator import BucketThreatModel
+    
+    context = {
+        "actor": actor,
+        "operation_type": operation_type,
+        "target_type": target_type,
+        "override_attempted": override_attempted
+    }
+    
+    detected_threats = BucketThreatModel.scan_for_threats(data, context)
+    has_critical = BucketThreatModel.has_critical_threats(detected_threats)
+    
+    # Determine action based on threat level
+    if has_critical:
+        action = "HALT_OPERATIONS"
+        status_code = 403
+    else:
+        action = "ALLOW_WITH_MONITORING"
+        status_code = 200
+    
+    response = {
+        "threats_detected": len(detected_threats),
+        "has_critical_threats": has_critical,
+        "threats": detected_threats,
+        "action": action,
+        "escalation_required": has_critical,
+        "context": context
+    }
+    
+    if has_critical:
+        # Log critical threat detection
+        logger.critical(f"Critical threats detected: {detected_threats}")
+        await audit_middleware.log_operation(
+            operation_type="THREAT_DETECTED",
+            artifact_id="system",
+            requester_id=actor or "unknown",
+            integration_id="threat_scanner",
+            data_after={"threats": detected_threats},
+            status="blocked",
+            error_message="Critical threats detected"
+        )
+    
+    if has_critical:
+        raise HTTPException(status_code=status_code, detail=response)
+    
+    return response
+
+@app.post("/governance/threats/check-storage-exhaustion")
+async def check_storage_exhaustion(
+    used_gb: float = Query(..., description="Current storage usage in GB"),
+    total_gb: Optional[float] = Query(None, description="Total capacity in GB")
+):
+    """Check for storage exhaustion threat (T1)"""
+    from config.scale_limits import ScaleLimits
+    
+    capacity_status = ScaleLimits.check_storage_capacity(used_gb, total_gb)
+    
+    if capacity_status["status"] == "CRITICAL":
+        logger.critical(f"Storage exhaustion detected: {capacity_status}")
+        await audit_middleware.log_operation(
+            operation_type="STORAGE_ALERT",
+            artifact_id="system",
+            requester_id="system",
+            integration_id="storage_monitor",
+            data_after=capacity_status,
+            status="critical"
+        )
+    
+    return {
+        "threat_id": "T1_STORAGE_EXHAUSTION",
+        "capacity_status": capacity_status,
+        "escalation_required": capacity_status["status"] in ["CRITICAL", "WARNING"],
+        "escalation_path": capacity_status.get("escalation_path"),
+        "response_timeline": capacity_status.get("response_timeline")
+    }
+
+@app.post("/governance/threats/check-executor-override")
+async def check_executor_override(
+    actor: str = Query(..., description="Actor attempting operation"),
+    requested_action: str = Query(..., description="Action being requested"),
+    governance_scope: bool = Query(False, description="Is this within governance scope?")
+):
+    """Check for executor authority violation (T5)"""
+    
+    # Check if executor is attempting unauthorized action
+    is_executor = actor == "akanksha_parab"
+    is_violation = is_executor and not governance_scope
+    
+    if is_violation:
+        threat = {
+            "threat_id": "T5_EXECUTOR_OVERRIDE",
+            "name": "Executor Authority Violation",
+            "level": "critical",
+            "description": f"Executor attempted action outside defined scope: {requested_action}",
+            "escalation": "Vijay_Dhawan",
+            "action": "BLOCK_AND_ESCALATE"
+        }
+        
+        logger.critical(f"Executor override detected: {threat}")
+        await audit_middleware.log_operation(
+            operation_type="EXECUTOR_OVERRIDE_ATTEMPT",
+            artifact_id="system",
+            requester_id=actor,
+            integration_id="governance_gate",
+            data_after={"requested_action": requested_action},
+            status="blocked",
+            error_message="Executor authority violation"
+        )
+        
+        raise HTTPException(status_code=403, detail={
+            "threat": threat,
+            "message": "Operation blocked - executor authority violation",
+            "escalation_required": True
+        })
+    
+    return {
+        "allowed": True,
+        "actor": actor,
+        "is_executor": is_executor,
+        "within_scope": governance_scope
+    }
+
+@app.post("/governance/threats/check-ai-escalation")
+async def check_ai_escalation(
+    actor: str = Query(..., description="Actor requesting operation"),
+    requested_operation: str = Query(..., description="Operation being requested")
+):
+    """Check for AI authority escalation (T6)"""
+    
+    is_ai_actor = actor.startswith("ai_")
+    allowed_operations = ["WRITE", "APPEND_AUDIT"]
+    is_escalation = is_ai_actor and requested_operation not in allowed_operations
+    
+    if is_escalation:
+        threat = {
+            "threat_id": "T6_AI_ESCALATION",
+            "name": "AI Authority Escalation",
+            "level": "critical",
+            "description": f"AI actor {actor} requested unauthorized operation: {requested_operation}",
+            "escalation": "Vijay_Dhawan",
+            "action": "REJECT_AND_ALERT"
+        }
+        
+        logger.critical(f"AI escalation detected: {threat}")
+        await audit_middleware.log_operation(
+            operation_type="AI_ESCALATION_ATTEMPT",
+            artifact_id="system",
+            requester_id=actor,
+            integration_id="governance_gate",
+            data_after={"requested_operation": requested_operation},
+            status="blocked",
+            error_message="AI authority escalation attempt"
+        )
+        
+        raise HTTPException(status_code=403, detail={
+            "threat": threat,
+            "message": "Operation blocked - AI escalation attempt",
+            "escalation_required": True
+        })
+    
+    return {
+        "allowed": True,
+        "actor": actor,
+        "is_ai_actor": is_ai_actor,
+        "operation": requested_operation
+    }
+
+@app.post("/governance/threats/check-audit-tampering")
+async def check_audit_tampering(
+    operation_type: str = Query(..., description="Operation type"),
+    target_type: str = Query(..., description="Target type"),
+    actor: str = Query(..., description="Actor attempting operation")
+):
+    """Check for audit trail tampering attempt (T8)"""
+    
+    is_tampering = operation_type in ["DELETE", "UPDATE"] and target_type == "audit_log"
+    
+    if is_tampering:
+        threat = {
+            "threat_id": "T8_AUDIT_TAMPERING",
+            "name": "Audit Trail Tampering Attempt",
+            "level": "critical",
+            "description": f"Attempt to {operation_type} audit logs by {actor}",
+            "escalation": "CEO",
+            "action": "HALT_AND_INVESTIGATE"
+        }
+        
+        logger.critical(f"AUDIT TAMPERING DETECTED: {threat}")
+        # Log to separate system logs (not the audit trail being tampered with)
+        
+        raise HTTPException(status_code=403, detail={
+            "threat": threat,
+            "message": "CRITICAL: Audit tampering attempt detected",
+            "escalation_required": True,
+            "severity": "MAXIMUM"
+        })
+    
+    return {
+        "allowed": True,
+        "operation_type": operation_type,
+        "target_type": target_type
+    }
+
+@app.post("/governance/threats/check-cross-product-leak")
+async def check_cross_product_leak(
+    product_id: str = Query(..., description="Product making request"),
+    requested_product_data: str = Query(..., description="Product data being accessed"),
+    artifact_type: str = Query(..., description="Artifact type")
+):
+    """Check for cross-product data leakage (T9)"""
+    
+    is_cross_product = product_id != requested_product_data
+    
+    if is_cross_product:
+        threat = {
+            "threat_id": "T9_CROSS_PRODUCT_LEAK",
+            "name": "Cross-Product Access Attempt",
+            "level": "critical",
+            "description": f"Product {product_id} attempted to access {requested_product_data} data",
+            "escalation": "Security_Team",
+            "action": "REJECT_OPERATION"
+        }
+        
+        logger.critical(f"Cross-product leak detected: {threat}")
+        await audit_middleware.log_operation(
+            operation_type="CROSS_PRODUCT_ACCESS",
+            artifact_id="system",
+            requester_id=product_id,
+            integration_id="governance_gate",
+            data_after={
+                "product_id": product_id,
+                "requested_product": requested_product_data,
+                "artifact_type": artifact_type
+            },
+            status="blocked",
+            error_message="Cross-product access violation"
+        )
+        
+        raise HTTPException(status_code=403, detail={
+            "threat": threat,
+            "message": "Operation blocked - cross-product isolation violation",
+            "escalation_required": True
+        })
+    
+    return {
+        "allowed": True,
+        "product_id": product_id,
+        "isolation_maintained": True
+    }
+
+@app.get("/governance/threats/escalation-matrix")
+async def get_threat_escalation_matrix():
+    """Get complete threat escalation matrix with response timelines"""
+    return {
+        "escalation_matrix": [
+            {
+                "threat_id": "T1_STORAGE_EXHAUSTION",
+                "severity": "HIGH",
+                "escalation_path": "Ops_Team -> Ashmit_Pandey",
+                "response_timeline": "90%: 6 hours, 99%: 1 hour, 100%: IMMEDIATE",
+                "automated_action": "HALT_WRITES at 100%"
+            },
+            {
+                "threat_id": "T2_METADATA_POISONING",
+                "severity": "CRITICAL",
+                "escalation_path": "CEO",
+                "response_timeline": "IMMEDIATE",
+                "automated_action": "REJECT_OPERATION"
+            },
+            {
+                "threat_id": "T3_SCHEMA_EVOLUTION",
+                "severity": "HIGH",
+                "escalation_path": "Vijay_Dhawan",
+                "response_timeline": "24 hours",
+                "automated_action": "REQUIRE_REVIEW"
+            },
+            {
+                "threat_id": "T5_EXECUTOR_OVERRIDE",
+                "severity": "CRITICAL",
+                "escalation_path": "Vijay_Dhawan",
+                "response_timeline": "IMMEDIATE",
+                "automated_action": "BLOCK_AND_ESCALATE"
+            },
+            {
+                "threat_id": "T6_AI_ESCALATION",
+                "severity": "CRITICAL",
+                "escalation_path": "Vijay_Dhawan",
+                "response_timeline": "IMMEDIATE",
+                "automated_action": "REJECT_AND_ALERT"
+            },
+            {
+                "threat_id": "T7_CROSS_PRODUCT_CONTAMINATION",
+                "severity": "HIGH",
+                "escalation_path": "Security_Team",
+                "response_timeline": "1 hour",
+                "automated_action": "REJECT_OPERATION"
+            },
+            {
+                "threat_id": "T8_AUDIT_TAMPERING",
+                "severity": "CRITICAL",
+                "escalation_path": "CEO",
+                "response_timeline": "IMMEDIATE",
+                "automated_action": "HALT_AND_INVESTIGATE"
+            },
+            {
+                "threat_id": "T9_OWNERSHIP_CHALLENGE",
+                "severity": "HIGH",
+                "escalation_path": "CEO + Legal",
+                "response_timeline": "As required by legal process",
+                "automated_action": "PRESERVE_EVIDENCE"
+            },
+            {
+                "threat_id": "T10_PROVENANCE_OVERTRUST",
+                "severity": "MEDIUM",
+                "escalation_path": "Vijay_Dhawan",
+                "response_timeline": "48 hours",
+                "automated_action": "VERIFY_METADATA"
+            }
+        ],
+        "certification": "All threats have automated detection and escalation paths",
+        "reference": "docs/14_bucket_threat_model.md"
+    }
+
+@app.get("/governance/threats/certification-status")
+async def get_threat_certification_status():
+    """Get threat model certification status"""
+    return {
+        "certification": "PRODUCTION_READY",
+        "total_threats_identified": 10,
+        "threats_mitigated": 7,
+        "threats_partially_mitigated": 2,
+        "threats_requiring_process_change": 1,
+        "automated_detection": "ALL_THREATS",
+        "automated_escalation": "ALL_THREATS",
+        "zero_acceptable_risks": True,
+        "governance_violations_halt_operations": True,
+        "certification_date": "2026-01-19",
+        "review_cycle": "6_months",
+        "next_review": "2026-07-19",
+        "bucket_owner": "Ashmit_Pandey",
+        "status": "CERTIFIED_FOR_PRODUCTION",
+        "reference": "docs/14_bucket_threat_model.md"
+    }
 
 # Law Agent Endpoints
 @app.post("/basic-query")

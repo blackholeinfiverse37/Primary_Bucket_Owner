@@ -1,108 +1,79 @@
-# Threat Validator Utilities - Test Guide
+# 🛡️ THREAT VALIDATOR TEST GUIDE
 
-## 🎯 Overview
+**Document:** THREAT_VALIDATOR_TEST_GUIDE.md  
+**Status:** ACTIVE  
+**Owner:** Ashmit Pandey  
+**Last Updated:** January 2026
 
-The Threat Validator Utilities provide centralized threat detection based on the BHIV Bucket Threat Model (doc 14). This guide shows how to test all threat detection features.
+---
 
-## 🚀 Quick Test (2 Minutes)
+## 📋 OVERVIEW
 
-### Step 1: Start the Server
-```bash
-python main.py
-```
+This guide provides comprehensive testing procedures for the BHIV Bucket Threat Validator, which implements threat detection patterns from Document 14 (Threat Model).
 
-### Step 2: Get All Threats
+---
+
+## 🧪 TEST SCENARIOS
+
+### Test 1: Get All Threats
+**Purpose:** Verify all 10 threats are registered
+
 ```bash
 curl http://localhost:8000/governance/threats
 ```
 
-**Expected Response**:
+**Expected Response:**
 ```json
 {
-  "threats": {
-    "T1_ACCESS_BYPASS": {
-      "name": "Access Control Bypass",
-      "level": "critical",
-      "description": "Direct database access or credential leakage",
-      "mitigations": [...],
-      "detection_patterns": [...]
+  "threats": [
+    {
+      "threat_id": "T1_STORAGE_EXHAUSTION",
+      "severity": "HIGH",
+      "description": "Storage exhaustion attack",
+      "patterns": ["rapid_writes", "large_artifacts", "metadata_explosion"]
     },
-    "T2_SCHEMA_CORRUPTION": {...},
-    "T3_DATA_LOSS": {...},
-    "T4_GOVERNANCE_CIRCUMVENTION": {...},
-    "T5_SCALE_FAILURE": {...},
-    "T6_LEGAL_AMBIGUITY": {...},
-    "T7_OVER_TRUST": {...}
-  },
-  "total_threats": 7,
-  "reference": "docs/14_bucket_threat_model.md"
+    ...
+  ],
+  "total_threats": 10
 }
 ```
 
-✅ All 7 threats loaded!
-
 ---
 
-## 🧪 Detailed Testing
+### Test 2: Get Specific Threat Details
+**Purpose:** Retrieve details for a specific threat
 
-### Test 1: Get Specific Threat Details
-
-#### T1: Access Control Bypass
 ```bash
-curl http://localhost:8000/governance/threats/T1_ACCESS_BYPASS
+curl http://localhost:8000/governance/threats/T2_METADATA_POISONING
 ```
 
-**Expected Response**:
+**Expected Response:**
 ```json
 {
-  "threat_id": "T1_ACCESS_BYPASS",
-  "name": "Access Control Bypass",
-  "level": "critical",
-  "description": "Direct database access or credential leakage",
-  "mitigations": [
-    "API-only access pattern",
-    "No MongoDB credentials in code",
-    "Integration token validation",
-    "Rate limiting per integration"
-  ],
-  "detection_patterns": [
-    "db_connection_string",
-    "direct_mongo_access",
-    "credential_in_request",
-    "db_connection",
-    "mongodb://",
-    "direct_database"
-  ]
+  "threat_id": "T2_METADATA_POISONING",
+  "severity": "CRITICAL",
+  "description": "False provenance metadata",
+  "patterns": ["forged_owner", "backdated_timestamp", "invalid_integration"]
 }
-```
-
-#### T2: Schema Corruption
-```bash
-curl http://localhost:8000/governance/threats/T2_SCHEMA_CORRUPTION
-```
-
-#### T4: Governance Circumvention
-```bash
-curl http://localhost:8000/governance/threats/T4_GOVERNANCE_CIRCUMVENTION
 ```
 
 ---
 
-### Test 2: Scan Data for Threats
+### Test 3: Scan for Threats (Clean Data)
+**Purpose:** Verify clean data passes threat scan
 
-#### Safe Data (Should Pass)
 ```bash
 curl -X POST "http://localhost:8000/governance/threats/scan" \
   -H "Content-Type: application/json" \
   -d '{
-    "integration_name": "ai_assistant",
-    "artifact_class": "metadata",
-    "nsfw_policy": "strict",
-    "retention_policy": "90_days"
+    "owner_id": "valid_owner_123",
+    "product_id": "AI_Assistant",
+    "artifact_type": "metadata",
+    "timestamp": "2026-01-20T10:00:00Z"
   }'
 ```
 
-**Expected Response**:
+**Expected Response:**
 ```json
 {
   "threats_detected": 0,
@@ -112,335 +83,210 @@ curl -X POST "http://localhost:8000/governance/threats/scan" \
 }
 ```
 
-✅ No threats detected!
+---
 
-#### Malicious Data - T1 (Should Detect)
+### Test 4: Detect Metadata Poisoning
+**Purpose:** Verify forged owner_id is detected
+
 ```bash
 curl -X POST "http://localhost:8000/governance/threats/scan" \
   -H "Content-Type: application/json" \
   -d '{
-    "integration_name": "malicious",
-    "db_connection": "mongodb://admin:password@localhost:27017",
-    "artifact_class": "metadata"
+    "owner_id": "",
+    "product_id": "AI_Assistant",
+    "artifact_type": "metadata"
   }'
 ```
 
-**Expected Response**:
+**Expected Response:**
 ```json
 {
   "threats_detected": 1,
   "has_critical_threats": true,
   "threats": [
     {
-      "threat_id": "T1_ACCESS_BYPASS",
-      "name": "Access Control Bypass",
+      "threat_id": "T2_METADATA_POISONING",
+      "name": "Metadata Poisoning",
       "level": "critical",
-      "pattern_matched": "db_connection",
-      "description": "Direct database access or credential leakage"
+      "pattern_matched": "forged_owner",
+      "description": "Invalid or forged owner_id detected"
     }
   ],
   "recommendation": "BLOCK"
 }
 ```
 
-✅ T1 threat detected!
+---
 
-#### Malicious Data - T2 (Should Detect)
+### Test 5: Detect Backdated Timestamp
+**Purpose:** Verify backdated timestamps are caught
+
 ```bash
 curl -X POST "http://localhost:8000/governance/threats/scan" \
   -H "Content-Type: application/json" \
   -d '{
-    "integration_name": "schema_modifier",
-    "$schema_change": {
-      "add_field": "malicious_field",
-      "modify_index": true
-    }
+    "owner_id": "valid_owner_123",
+    "timestamp": "2020-01-01T00:00:00Z"
   }'
 ```
 
-**Expected Response**:
+**Expected Response:**
 ```json
 {
   "threats_detected": 1,
   "has_critical_threats": true,
   "threats": [
     {
-      "threat_id": "T2_SCHEMA_CORRUPTION",
-      "name": "Schema Corruption",
+      "threat_id": "T2_METADATA_POISONING",
+      "name": "Backdated Timestamp",
       "level": "critical",
-      "pattern_matched": "$schema_change",
-      "description": "Unauthorized schema modification or field injection"
+      "pattern_matched": "backdated_timestamp"
     }
   ],
   "recommendation": "BLOCK"
 }
 ```
 
-✅ T2 threat detected!
+---
 
-#### Multiple Threats (Should Detect All)
+### Test 6: Detect Large Artifact Warning
+**Purpose:** Verify large artifacts trigger warning
+
 ```bash
 curl -X POST "http://localhost:8000/governance/threats/scan" \
   -H "Content-Type: application/json" \
   -d '{
-    "db_connection": "mongodb://localhost",
-    "$schema_change": {"add": "field"},
-    "bulk_delete": true,
-    "bypass_validation": true
+    "owner_id": "valid_owner_123",
+    "large_data": "'$(python -c 'print("x" * 11000000)')''"
   }'
 ```
 
-**Expected Response**:
+**Expected Response:**
 ```json
 {
-  "threats_detected": 4,
-  "has_critical_threats": true,
+  "threats_detected": 1,
+  "has_critical_threats": false,
   "threats": [
     {
-      "threat_id": "T1_ACCESS_BYPASS",
-      "name": "Access Control Bypass",
-      "level": "critical",
-      "pattern_matched": "db_connection",
-      "description": "Direct database access or credential leakage"
-    },
-    {
-      "threat_id": "T2_SCHEMA_CORRUPTION",
-      "name": "Schema Corruption",
-      "level": "critical",
-      "pattern_matched": "$schema_change",
-      "description": "Unauthorized schema modification or field injection"
-    },
-    {
-      "threat_id": "T3_DATA_LOSS",
-      "name": "Data Loss",
-      "level": "critical",
-      "pattern_matched": "bulk_delete",
-      "description": "Accidental or intentional data deletion"
-    },
-    {
-      "threat_id": "T4_GOVERNANCE_CIRCUMVENTION",
-      "name": "Governance Circumvention",
-      "level": "high",
-      "pattern_matched": "bypass_validation",
-      "description": "Attempts to bypass governance gate"
+      "threat_id": "T1_STORAGE_EXHAUSTION",
+      "name": "Large Artifact Warning",
+      "level": "medium",
+      "pattern_matched": "large_artifacts"
     }
   ],
-  "recommendation": "BLOCK"
+  "recommendation": "ALLOW"
 }
 ```
-
-✅ Multiple threats detected!
 
 ---
 
-### Test 3: Find Threats by Pattern
+### Test 7: Find Threats by Pattern
+**Purpose:** Search threats by detection pattern
 
-#### Pattern: "db_connection"
 ```bash
-curl "http://localhost:8000/governance/threats/pattern/db_connection"
+curl "http://localhost:8000/governance/threats/pattern/forged_owner"
 ```
 
-**Expected Response**:
+**Expected Response:**
 ```json
 {
-  "pattern": "db_connection",
-  "matching_threats": ["T1_ACCESS_BYPASS"],
-  "count": 1
-}
-```
-
-#### Pattern: "$schema"
-```bash
-curl "http://localhost:8000/governance/threats/pattern/\$schema"
-```
-
-**Expected Response**:
-```json
-{
-  "pattern": "$schema",
-  "matching_threats": ["T2_SCHEMA_CORRUPTION"],
-  "count": 1
-}
-```
-
-#### Pattern: "bulk_delete"
-```bash
-curl "http://localhost:8000/governance/threats/pattern/bulk_delete"
-```
-
-**Expected Response**:
-```json
-{
-  "pattern": "bulk_delete",
-  "matching_threats": ["T3_DATA_LOSS"],
+  "pattern": "forged_owner",
+  "matching_threats": [
+    {
+      "threat_id": "T2_METADATA_POISONING",
+      "severity": "CRITICAL",
+      "description": "False provenance metadata",
+      "pattern": "forged_owner"
+    }
+  ],
   "count": 1
 }
 ```
 
 ---
 
-### Test 4: Integration with Governance Gate
+## 🔧 PYTHON TESTING
 
-#### Valid Integration (Should Approve)
-```bash
-curl -X POST "http://localhost:8000/governance/gate/validate-integration?integration_id=safe_integration&integration_type=api&artifact_classes=metadata&product_name=AI_Assistant" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "nsfw_policy": "strict",
-    "retention_policy": "90_days"
-  }'
+### Test Script
+```python
+import requests
+
+BASE_URL = "http://localhost:8000"
+
+def test_threat_validator():
+    # Test 1: Get all threats
+    response = requests.get(f"{BASE_URL}/governance/threats")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_threats"] == 10
+    print("✅ Test 1 passed: All threats retrieved")
+    
+    # Test 2: Scan clean data
+    clean_data = {
+        "owner_id": "valid_owner_123",
+        "product_id": "AI_Assistant",
+        "artifact_type": "metadata"
+    }
+    response = requests.post(f"{BASE_URL}/governance/threats/scan", json=clean_data)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["threats_detected"] == 0
+    print("✅ Test 2 passed: Clean data accepted")
+    
+    # Test 3: Detect metadata poisoning
+    poisoned_data = {
+        "owner_id": "",
+        "product_id": "AI_Assistant"
+    }
+    response = requests.post(f"{BASE_URL}/governance/threats/scan", json=poisoned_data)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["has_critical_threats"] == True
+    print("✅ Test 3 passed: Metadata poisoning detected")
+    
+    print("\n🎉 All threat validator tests passed!")
+
+if __name__ == "__main__":
+    test_threat_validator()
 ```
-
-**Expected Response**:
-```json
-{
-  "decision": "approved",
-  "threats_found": []
-}
-```
-
-✅ Integration approved (no threats)!
-
-#### Malicious Integration (Should Reject)
-```bash
-curl -X POST "http://localhost:8000/governance/gate/validate-integration?integration_id=malicious_integration&integration_type=direct_database&artifact_classes=metadata&product_name=AI_Assistant" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "db_connection": "mongodb://localhost",
-    "nsfw_policy": "strict"
-  }'
-```
-
-**Expected Response**:
-```json
-{
-  "detail": {
-    "message": "Integration rejected by governance gate",
-    "reasons": ["Critical threats detected"],
-    "threats": [
-      {
-        "threat_id": "T1_ACCESS_BYPASS",
-        "name": "Access Control Bypass",
-        "level": "critical",
-        "pattern_matched": "db_connection",
-        "description": "Direct database access or credential leakage"
-      }
-    ]
-  }
-}
-```
-
-✅ Integration rejected (threats detected)!
 
 ---
 
-## 📊 Threat Detection Matrix
+## ✅ VALIDATION CHECKLIST
 
-| Threat ID | Level | Detection Pattern | Test Status |
-|-----------|-------|-------------------|-------------|
-| T1_ACCESS_BYPASS | CRITICAL | db_connection, mongodb:// | ✅ Tested |
-| T2_SCHEMA_CORRUPTION | CRITICAL | $schema_change, _id | ✅ Tested |
-| T3_DATA_LOSS | CRITICAL | bulk_delete, cascade_delete | ✅ Tested |
-| T4_GOVERNANCE_CIRCUMVENTION | HIGH | bypass_validation, _internal | ✅ Tested |
-| T5_SCALE_FAILURE | HIGH | excessive_size, rate_limit_exceeded | ✅ Tested |
-| T6_LEGAL_AMBIGUITY | MEDIUM | missing_owner, no_audit_trail | ✅ Tested |
-| T7_OVER_TRUST | MEDIUM | assumed_immutability | ✅ Tested |
-
----
-
-## ✅ Verification Checklist
-
-After testing, verify:
-
-- [ ] All 7 threats are accessible via API
-- [ ] Threat scanning detects patterns correctly
-- [ ] Critical threats trigger BLOCK recommendation
+- [ ] All 10 threats are registered
+- [ ] Clean data passes threat scan
+- [ ] Forged owner_id is detected
+- [ ] Backdated timestamps are caught
+- [ ] Large artifacts trigger warnings
+- [ ] Pattern search works correctly
+- [ ] Critical threats block operations
 - [ ] Non-critical threats allow with warning
-- [ ] Pattern matching works for all threat types
-- [ ] Governance gate integration works
-- [ ] Existing endpoints still functional
 
 ---
 
-## 🔧 Python Usage Examples
+## 📊 EXPECTED RESULTS
 
-### Example 1: Direct Threat Model Access
-```python
-from utils.threat_validator import BucketThreatModel
-
-# Get all threats
-threats = BucketThreatModel.get_all_threats()
-print(f"Total threats: {len(threats)}")
-
-# Get specific threat
-t1 = BucketThreatModel.get_threat("T1_ACCESS_BYPASS")
-print(f"Threat: {t1['name']}")
-print(f"Level: {t1['level']}")
-
-# Scan data for threats
-data = {"db_connection": "mongodb://localhost"}
-detected = BucketThreatModel.scan_for_threats(data)
-print(f"Threats detected: {len(detected)}")
-
-# Check for critical threats
-has_critical = BucketThreatModel.has_critical_threats(detected)
-print(f"Has critical threats: {has_critical}")
-```
-
-### Example 2: Integration Validation
-```python
-from governance.governance_gate import governance_gate
-
-# Validate integration
-result = await governance_gate.validate_integration(
-    integration_id="test_integration",
-    integration_type="api",
-    artifact_classes=["metadata"],
-    data_schema={"nsfw_policy": "strict"},
-    product_name="AI_Assistant"
-)
-
-if result["decision"] == "approved":
-    print("Integration approved!")
-else:
-    print(f"Integration rejected: {result['reasons']}")
-    print(f"Threats found: {result['threats_found']}")
-```
+### Threat Detection Summary
+- **T1 (Storage Exhaustion):** Detects large artifacts (>10MB)
+- **T2 (Metadata Poisoning):** Detects invalid owner_id, backdated timestamps
+- **T3 (Schema Evolution):** Detects suspicious nested structures
+- **T7 (Cross-Product):** Detects product/artifact mismatches
+- **All Others:** Documented but require integration-specific detection
 
 ---
 
-## 🆘 Troubleshooting
+## 🚨 TROUBLESHOOTING
 
 ### Issue: Threats not detected
-**Solution**: Check that pattern exists in threat model detection_patterns
+**Solution:** Ensure threat_validator.py is imported correctly in governance_gate.py
 
 ### Issue: False positives
-**Solution**: Review detection patterns and adjust if needed
+**Solution:** Adjust detection thresholds in threat_validator.py
 
-### Issue: Import errors
-**Solution**: Verify `utils/threat_validator.py` exists and is accessible
-
----
-
-## 📚 Documentation References
-
-- **Threat Model**: `docs/14_bucket_threat_model.md`
-- **Governance Gate**: `governance/governance_gate.py`
-- **Threat Validator**: `utils/threat_validator.py`
-- **API Endpoints**: `main.py`
+### Issue: Missing threats
+**Solution:** Verify all 10 threats are defined in THREATS dictionary
 
 ---
 
-## 🎉 Success!
-
-You've successfully tested the Threat Validator Utilities!
-
-**Features Verified**:
-- ✅ 7 threats defined and accessible
-- ✅ Pattern-based threat detection
-- ✅ Critical threat identification
-- ✅ Integration with governance gate
-- ✅ API endpoints functional
-- ✅ Backward compatibility maintained
-
-**The threat detection system is production-ready!** 🎯
+**END OF THREAT VALIDATOR TEST GUIDE**

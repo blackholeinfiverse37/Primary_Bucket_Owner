@@ -6,6 +6,14 @@ from utils.logger import logger
 async def process(input_data: Dict) -> Dict:
     try:
         api_url = os.getenv("GURUKUL_TREND_API")
+        if not api_url:
+            logger.warning("GURUKUL_TREND_API not set, using mock data")
+            return {
+                "success": True,
+                "trends": ["Mock trend 1", "Mock trend 2"],
+                "note": "Using mock data - set GURUKUL_TREND_API in .env for real API"
+            }
+        
         logger.debug(f"Calling gurukul_trend API: {api_url} with input: {input_data}")
         async with httpx.AsyncClient() as client:
             response = await client.post(api_url, json=input_data, timeout=30)

@@ -223,3 +223,7 @@ def run(input_data: Dict[str, Any]) -> Dict[str, Any]:
     """Entry point for the agent"""
     agent = AutoDiagnosticsAgent()
     return agent.process(input_data)
+
+async def process(input_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Async wrapper for compatibility"""
+    return run(input_data)

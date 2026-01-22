@@ -1,458 +1,353 @@
-# Scale Limits Configuration - Test Guide
+# 📈 SCALE LIMITS TEST GUIDE
 
-## 🎯 Overview
+**Document:** SCALE_LIMITS_TEST_GUIDE.md  
+**Status:** ACTIVE  
+**Owner:** Ashmit Pandey  
+**Last Updated:** January 2026
 
-The Scale Limits Configuration provides centralized scale limits and performance targets based on doc 15 (SCALE_READINESS.md). This guide shows how to test all scale limit features.
+---
 
-## 🚀 Quick Test (2 Minutes)
+## 📋 OVERVIEW
 
-### Step 1: Start the Server
-```bash
-python main.py
-```
+This guide provides comprehensive testing procedures for BHIV Bucket Scale Limits, which implement capacity management from Document 15 (Scale Readiness).
 
-### Step 2: Get Detailed Scale Limits
+---
+
+## 🧪 TEST SCENARIOS
+
+### Test 1: Get All Scale Limits
+**Purpose:** Verify all scale limits are configured
+
 ```bash
 curl http://localhost:8000/governance/scale/limits
 ```
 
-**Expected Response**:
+**Expected Response:**
 ```json
 {
   "scale_limits": {
-    "throughput": {
-      "writes_per_second": 1000,
-      "reads_per_second": 10000,
-      "batch_max_items": 10000
-    },
     "storage": {
-      "max_artifacts": 100000000,
-      "max_artifact_size": 500000000,
-      "max_collection_size": 10000000000000
+      "max_total_gb": 1000,
+      "max_artifact_size": 16777216,
+      "warning_threshold": 0.90,
+      "critical_threshold": 0.99
     },
-    "latency_targets_ms": {
-      "fetch_p95": 100,
-      "list_p95": 500,
-      "write_p95": 200
+    "write_performance": {
+      "max_throughput_per_sec": 1000,
+      "safe_throughput_per_sec": 500,
+      "max_concurrent": 100,
+      "safe_concurrent": 50
     },
-    "connections": {
-      "max_concurrent": 1000,
-      "pool_size": 100,
-      "timeout_seconds": 30
-    },
-    "scales_safely": [
-      "read_heavy_workloads",
-      "time_distributed_writes",
-      "archive_queries",
-      "metadata_searches"
-    ],
-    "does_not_scale": [
-      "real_time_concurrent_writes_same_artifact",
-      "full_text_search_all_artifacts",
-      "complex_joins_across_types",
-      "geo_distributed_consistency"
-    ],
-    "never_assume": [
-      "eventual_consistency_is_guaranteed",
-      "artifacts_can_be_quietly_deleted",
-      "schema_changes_backward_compatible",
-      "any_team_can_write_directly",
-      "immutability_is_automatic",
-      "provenance_is_complete"
-    ]
+    ...
   },
   "performance_targets": {
-    "latency_ms": {
-      "p50": 30,
-      "p95": 100,
-      "p99": 500
-    },
-    "error_rate": {
-      "max_percent": 0.1
-    },
-    "availability": {
-      "minimum_uptime_percent": 99.5
-    }
-  },
-  "reference": "docs/15_scale_readiness.md",
-  "enforcement": "hard_limits",
-  "status": "production_active"
+    "write_latency_p99_ms": 100,
+    "read_latency_p99_ms": 50,
+    ...
+  }
 }
 ```
 
-✅ All scale limits loaded!
-
 ---
 
-## 🧪 Detailed Testing
+### Test 2: Validate Operation Within Limits
+**Purpose:** Verify operation within safe limits is accepted
 
-### Test 1: Validate Operations Within Limits
-
-#### Valid Write Operation
 ```bash
-curl -X POST "http://localhost:8000/governance/scale/validate?operation_type=write&data_size=1000000&frequency=500"
+curl -X POST "http://localhost:8000/governance/scale/validate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "operation_type": "write",
+    "data_size": 1048576,
+    "frequency": 100
+  }'
 ```
 
-**Expected Response**:
+**Expected Response:**
 ```json
 {
   "valid": true,
   "message": "Operation within scale limits",
   "operation_type": "write",
-  "data_size": 1000000,
-  "frequency": 500
+  "data_size": 1048576,
+  "frequency": 100
 }
 ```
-
-✅ Operation validated!
-
-#### Valid Read Operation
-```bash
-curl -X POST "http://localhost:8000/governance/scale/validate?operation_type=read&data_size=100000&frequency=5000"
-```
-
-**Expected Response**:
-```json
-{
-  "valid": true,
-  "message": "Operation within scale limits",
-  "operation_type": "read",
-  "data_size": 100000,
-  "frequency": 5000
-}
-```
-
-✅ Read operation validated!
 
 ---
 
-### Test 2: Detect Limit Violations
+### Test 3: Detect Size Limit Violation
+**Purpose:** Verify oversized artifacts are rejected
 
-#### Oversized Artifact (Should Reject)
 ```bash
-curl -X POST "http://localhost:8000/governance/scale/validate?operation_type=write&data_size=600000000&frequency=1"
-```
-
-**Expected Response**:
-```json
-{
-  "detail": {
-    "message": "Operation exceeds scale limits",
-    "error": "Artifact size 600000000 exceeds 500000000 limit",
+curl -X POST "http://localhost:8000/governance/scale/validate" \
+  -H "Content-Type: application/json" \
+  -d '{
     "operation_type": "write",
-    "data_size": 600000000,
+    "data_size": 20000000,
     "frequency": 1
-  }
+  }'
+```
+
+**Expected Response:**
+```json
+{
+  "message": "Operation exceeds scale limits",
+  "error": "Data size 20000000 exceeds limit of 16777216",
+  "operation_type": "write",
+  "data_size": 20000000,
+  "frequency": 1
 }
 ```
 
-✅ Oversized artifact rejected!
+---
 
-#### Excessive Write Frequency (Should Reject)
+### Test 4: Detect Frequency Limit Violation
+**Purpose:** Verify excessive write frequency is rejected
+
 ```bash
-curl -X POST "http://localhost:8000/governance/scale/validate?operation_type=write&data_size=1000&frequency=2000"
-```
-
-**Expected Response**:
-```json
-{
-  "detail": {
-    "message": "Operation exceeds scale limits",
-    "error": "Write frequency 2000/s exceeds 1000/s limit",
+curl -X POST "http://localhost:8000/governance/scale/validate" \
+  -H "Content-Type: application/json" \
+  -d '{
     "operation_type": "write",
     "data_size": 1000,
-    "frequency": 2000
-  }
-}
+    "frequency": 1500
+  }'
 ```
 
-✅ Excessive frequency rejected!
-
-#### Excessive Read Frequency (Should Reject)
-```bash
-curl -X POST "http://localhost:8000/governance/scale/validate?operation_type=read&data_size=1000&frequency=15000"
-```
-
-**Expected Response**:
+**Expected Response:**
 ```json
 {
-  "detail": {
-    "message": "Operation exceeds scale limits",
-    "error": "Read frequency 15000/s exceeds 10000/s limit",
-    "operation_type": "read",
-    "data_size": 1000,
-    "frequency": 15000
-  }
+  "message": "Operation exceeds scale limits",
+  "error": "Write frequency 1500/sec exceeds limit of 1000/sec",
+  "operation_type": "write",
+  "data_size": 1000,
+  "frequency": 1500
 }
 ```
-
-✅ Excessive read frequency rejected!
 
 ---
 
-### Test 3: Check Limit Proximity
+### Test 5: Check Limit Proximity (Healthy)
+**Purpose:** Verify healthy usage reporting
 
-#### Healthy Usage (50%)
 ```bash
-curl "http://localhost:8000/governance/scale/proximity/artifacts?current_value=50000000"
+curl "http://localhost:8000/governance/scale/proximity/artifacts_per_product?current_value=1000000"
 ```
 
-**Expected Response**:
+**Expected Response:**
 ```json
 {
-  "limit_name": "artifacts",
-  "current_value": 50000000,
-  "limit_value": 100000000,
-  "percentage_used": 50.0,
-  "status": "healthy",
-  "message": "Within safe limits"
+  "limit_name": "artifacts_per_product",
+  "current_value": 1000000,
+  "limit_value": 10000000,
+  "usage_ratio": 0.1,
+  "usage_percent": 10.0,
+  "remaining": 9000000,
+  "status": "HEALTHY"
 }
 ```
-
-✅ Healthy status!
-
-#### Caution Zone (75%)
-```bash
-curl "http://localhost:8000/governance/scale/proximity/artifacts?current_value=75000000"
-```
-
-**Expected Response**:
-```json
-{
-  "limit_name": "artifacts",
-  "current_value": 75000000,
-  "limit_value": 100000000,
-  "percentage_used": 75.0,
-  "status": "caution",
-  "message": "Monitor closely"
-}
-```
-
-✅ Caution status!
-
-#### Warning Zone (85%)
-```bash
-curl "http://localhost:8000/governance/scale/proximity/artifacts?current_value=85000000"
-```
-
-**Expected Response**:
-```json
-{
-  "limit_name": "artifacts",
-  "current_value": 85000000,
-  "limit_value": 100000000,
-  "percentage_used": 85.0,
-  "status": "warning",
-  "message": "Nearing limit - plan capacity increase"
-}
-```
-
-✅ Warning status!
-
-#### Critical Zone (95%)
-```bash
-curl "http://localhost:8000/governance/scale/proximity/artifacts?current_value=95000000"
-```
-
-**Expected Response**:
-```json
-{
-  "limit_name": "artifacts",
-  "current_value": 95000000,
-  "limit_value": 100000000,
-  "percentage_used": 95.0,
-  "status": "critical",
-  "message": "Approaching limit - immediate action required"
-}
-```
-
-✅ Critical status!
 
 ---
 
-### Test 4: Get Scale Information
+### Test 6: Check Limit Proximity (Warning)
+**Purpose:** Verify warning threshold detection
 
-#### What Scales Safely
+```bash
+curl "http://localhost:8000/governance/scale/proximity/artifacts_per_product?current_value=8000000"
+```
+
+**Expected Response:**
+```json
+{
+  "limit_name": "artifacts_per_product",
+  "current_value": 8000000,
+  "limit_value": 10000000,
+  "usage_ratio": 0.8,
+  "usage_percent": 80.0,
+  "remaining": 2000000,
+  "status": "WARNING"
+}
+```
+
+---
+
+### Test 7: Check Limit Proximity (Critical)
+**Purpose:** Verify critical threshold detection
+
+```bash
+curl "http://localhost:8000/governance/scale/proximity/artifacts_per_product?current_value=9500000"
+```
+
+**Expected Response:**
+```json
+{
+  "limit_name": "artifacts_per_product",
+  "current_value": 9500000,
+  "limit_value": 10000000,
+  "usage_ratio": 0.95,
+  "usage_percent": 95.0,
+  "remaining": 500000,
+  "status": "CRITICAL"
+}
+```
+
+---
+
+### Test 8: Get What Scales Safely
+**Purpose:** Verify scaling behavior documentation
+
 ```bash
 curl http://localhost:8000/governance/scale/what-scales
 ```
 
-**Expected Response**:
+**Expected Response:**
 ```json
 {
   "scales_safely": [
-    "read_heavy_workloads",
-    "time_distributed_writes",
-    "archive_queries",
-    "metadata_searches"
+    "Number of artifact types (unlimited)",
+    "Number of products (up to 100)",
+    "Number of teams (up to 1000)",
+    "Artifact count per product (up to 10M)",
+    "Audit log retention (7 years unlimited entries)"
   ],
   "does_not_scale": [
-    "real_time_concurrent_writes_same_artifact",
-    "full_text_search_all_artifacts",
-    "complex_joins_across_types",
-    "geo_distributed_consistency"
+    "Real-time queries across all products",
+    "Distributed read-heavy operations (>100 reads/sec)",
+    "Multi-region replication",
+    "Full-text search",
+    "Real-time analytics"
   ],
   "never_assume": [
-    "eventual_consistency_is_guaranteed",
-    "artifacts_can_be_quietly_deleted",
-    "schema_changes_backward_compatible",
-    "any_team_can_write_directly",
-    "immutability_is_automatic",
-    "provenance_is_complete"
-  ],
-  "reference": "docs/15_scale_readiness.md"
+    "Eventual consistency without bounds",
+    "Automatic schema migrations",
+    "Backfill on failure",
+    "Infinite storage",
+    "Zero-downtime upgrades"
+  ]
 }
 ```
 
-✅ Scale information retrieved!
-
 ---
 
-### Test 5: Integration with Governance Gate
+## 🔧 PYTHON TESTING
 
-#### Validate Operation Through Gate
-```bash
-curl -X POST "http://localhost:8000/governance/gate/validate-operation?operation_type=CREATE&artifact_class=metadata&data_size=1000000&integration_id=test_integration"
-```
-
-**Expected Response** (if integration approved):
-```json
-{
-  "allowed": true,
-  "message": "Operation validated"
-}
-```
-
-#### Oversized Operation Through Gate (Should Reject)
-```bash
-curl -X POST "http://localhost:8000/governance/gate/validate-operation?operation_type=CREATE&artifact_class=metadata&data_size=600000000&integration_id=test_integration"
-```
-
-**Expected Response**:
-```json
-{
-  "detail": {
-    "message": "Operation not allowed",
-    "reason": "Data size 600000000 exceeds limit of 500000000"
-  }
-}
-```
-
-✅ Governance gate enforces scale limits!
-
----
-
-## 📊 Scale Limits Matrix
-
-| Limit Type | Value | Enforcement | Test Status |
-|------------|-------|-------------|-------------|
-| Max Artifact Size | 500MB | Hard limit | ✅ Tested |
-| Writes/Second | 1,000 | Rate limit | ✅ Tested |
-| Reads/Second | 10,000 | Rate limit | ✅ Tested |
-| Batch Max Items | 10,000 | Hard limit | ✅ Tested |
-| Max Artifacts | 100M | Monitored | ✅ Tested |
-| Max Collection Size | 10TB | Monitored | ✅ Tested |
-
----
-
-## ✅ Verification Checklist
-
-After testing, verify:
-
-- [ ] All scale limits accessible via API
-- [ ] Operation validation works correctly
-- [ ] Limit violations are detected
-- [ ] Proximity checking works (healthy/caution/warning/critical)
-- [ ] What scales safely information available
-- [ ] Governance gate enforces scale limits
-- [ ] Existing endpoints still functional
-
----
-
-## 🔧 Python Usage Examples
-
-### Example 1: Direct Scale Limits Access
+### Test Script
 ```python
-from config.scale_limits import ScaleLimits, PerformanceTargets
+import requests
 
-# Get scale limits
-limits = ScaleLimits()
-print(f"Max artifact size: {limits.MAX_ARTIFACT_SIZE}")
-print(f"Writes/sec limit: {limits.WRITES_PER_SECOND_LIMIT}")
-print(f"What scales safely: {limits.SCALES_SAFELY}")
+BASE_URL = "http://localhost:8000"
 
-# Get performance targets
-targets = PerformanceTargets()
-print(f"P95 latency target: {targets.P95_LATENCY_MS}ms")
-```
+def test_scale_limits():
+    # Test 1: Get all limits
+    response = requests.get(f"{BASE_URL}/governance/scale/limits")
+    assert response.status_code == 200
+    data = response.json()
+    assert "scale_limits" in data
+    assert "performance_targets" in data
+    print("✅ Test 1 passed: Scale limits retrieved")
+    
+    # Test 2: Validate safe operation
+    safe_op = {
+        "operation_type": "write",
+        "data_size": 1000000,
+        "frequency": 100
+    }
+    response = requests.post(f"{BASE_URL}/governance/scale/validate", json=safe_op)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["valid"] == True
+    print("✅ Test 2 passed: Safe operation accepted")
+    
+    # Test 3: Detect size violation
+    oversized_op = {
+        "operation_type": "write",
+        "data_size": 20000000,
+        "frequency": 1
+    }
+    response = requests.post(f"{BASE_URL}/governance/scale/validate", json=oversized_op)
+    assert response.status_code == 400
+    print("✅ Test 3 passed: Oversized operation rejected")
+    
+    # Test 4: Check proximity (healthy)
+    response = requests.get(
+        f"{BASE_URL}/governance/scale/proximity/artifacts_per_product",
+        params={"current_value": 1000000}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "HEALTHY"
+    print("✅ Test 4 passed: Healthy usage detected")
+    
+    # Test 5: Check proximity (critical)
+    response = requests.get(
+        f"{BASE_URL}/governance/scale/proximity/artifacts_per_product",
+        params={"current_value": 9500000}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "CRITICAL"
+    print("✅ Test 5 passed: Critical usage detected")
+    
+    print("\n🎉 All scale limits tests passed!")
 
-### Example 2: Validate Operation
-```python
-from config.scale_limits import validate_operation_scale
-
-# Validate write operation
-is_valid, error_msg = validate_operation_scale(
-    operation_type="write",
-    data_size=1_000_000,  # 1MB
-    frequency=500  # 500 writes/sec
-)
-
-if is_valid:
-    print("Operation within limits")
-else:
-    print(f"Operation rejected: {error_msg}")
-```
-
-### Example 3: Check Proximity
-```python
-from config.scale_limits import check_scale_limit_proximity
-
-# Check artifact count proximity
-result = check_scale_limit_proximity(
-    current_value=85_000_000,
-    limit_name="artifacts"
-)
-
-print(f"Status: {result['status']}")
-print(f"Percentage used: {result['percentage_used']}%")
-print(f"Message: {result['message']}")
+if __name__ == "__main__":
+    test_scale_limits()
 ```
 
 ---
 
-## 🆘 Troubleshooting
+## ✅ VALIDATION CHECKLIST
+
+- [ ] All scale limits are configured
+- [ ] Safe operations are accepted
+- [ ] Oversized artifacts are rejected
+- [ ] Excessive frequency is rejected
+- [ ] Healthy usage is reported correctly
+- [ ] Warning threshold triggers at 70%
+- [ ] Critical threshold triggers at 90%
+- [ ] What scales/doesn't scale is documented
+
+---
+
+## 📊 EXPECTED LIMITS
+
+### Storage Limits
+- **Max Total Storage:** 1TB (1000GB)
+- **Max Artifact Size:** 16MB
+- **Warning Threshold:** 90% capacity
+- **Critical Threshold:** 99% capacity
+
+### Write Performance
+- **Max Throughput:** 1000 writes/sec
+- **Safe Throughput:** 500 writes/sec
+- **Max Concurrent:** 100 writers
+- **Safe Concurrent:** 50 writers
+
+### Read Performance
+- **Max Throughput:** 100 reads/sec
+- **Safe Throughput:** 50 reads/sec
+- **Max Concurrent:** 50 readers
+- **Safe Concurrent:** 20 readers
+
+### Artifacts
+- **Max Per Product:** 10M artifacts
+- **Max Total:** 100M artifacts
+- **Warning Per Product:** 7M artifacts
+
+---
+
+## 🚨 TROUBLESHOOTING
 
 ### Issue: Limits not enforced
-**Solution**: Check that governance_gate.py imports scale_limits correctly
+**Solution:** Ensure scale_limits.py is imported in governance_gate.py
 
-### Issue: Validation always passes
-**Solution**: Verify scale_limits.py values are correct
+### Issue: False rejections
+**Solution:** Verify data_size calculation is correct
 
-### Issue: Import errors
-**Solution**: Ensure `config/scale_limits.py` exists and is accessible
-
----
-
-## 📚 Documentation References
-
-- **Scale Readiness**: `docs/15_scale_readiness.md`
-- **Scale Limits Config**: `config/scale_limits.py`
-- **Governance Gate**: `governance/governance_gate.py`
-- **API Endpoints**: `main.py`
+### Issue: Missing limits
+**Solution:** Check ScaleLimits class has all required constants
 
 ---
 
-## 🎉 Success!
-
-You've successfully tested the Scale Limits Configuration!
-
-**Features Verified**:
-- ✅ Centralized scale limits (11 limits defined)
-- ✅ Operation validation
-- ✅ Limit violation detection
-- ✅ Proximity monitoring (4 status levels)
-- ✅ Scale information (what scales/doesn't scale)
-- ✅ Governance gate integration
-- ✅ Backward compatibility maintained
-
-**The scale limits system is production-ready!** 🎯
+**END OF SCALE LIMITS TEST GUIDE**

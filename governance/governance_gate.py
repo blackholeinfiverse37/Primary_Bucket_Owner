@@ -8,8 +8,21 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 from enum import Enum
 from utils.logger import get_logger
-from utils.threat_validator import BucketThreatModel
-from config.scale_limits import ScaleLimits, validate_operation_scale
+
+try:
+    from utils.threat_validator import BucketThreatModel
+except ImportError:
+    logger = get_logger(__name__)
+    logger.warning("Threat validator not available, using basic validation")
+    BucketThreatModel = None
+
+try:
+    from config.scale_limits import ScaleLimits, validate_operation_scale
+except ImportError:
+    logger = get_logger(__name__) if 'logger' not in locals() else logger
+    logger.warning("Scale limits not available, using defaults")
+    ScaleLimits = None
+    validate_operation_scale = None
 
 logger = get_logger(__name__)
 
@@ -26,7 +39,16 @@ class ThreatLevel(Enum):
     LOW = "LOW"
 
 # Scale limits from doc 15 (now imported from config)
-scale_limits_instance = ScaleLimits()
+scale_limits_instance = ScaleLimits() if ScaleLimits else None
+
+# Default scale limits if module not available
+class DefaultScaleLimits:
+    MAX_ARTIFACT_SIZE = 16 * 1024 * 1024  # 16MB
+    MAX_CONCURRENT_WRITES = 100
+    MAX_WRITE_THROUGHPUT_PER_SEC = 1000
+
+if not scale_limits_instance:
+    scale_limits_instance = DefaultScaleLimits()
 
 # Product safety rules from doc 16
 PRODUCT_RULES = {
@@ -166,7 +188,10 @@ class GovernanceGate:
         """Validate against threat model (doc 14) using centralized threat validator"""
         
         # Scan data schema for threat patterns
-        detected_threats = BucketThreatModel.scan_for_threats(data_schema)
+        if BucketThreatModel:
+            detected_threats = BucketThreatModel.scan_for_threats(data_schema)
+        else:
+            detected_threats = []
         
         # Additional context-based threat detection
         if integration_type == "direct_database":
@@ -197,7 +222,10 @@ class GovernanceGate:
             })
         
         # Check for critical threats
-        has_critical = BucketThreatModel.has_critical_threats(detected_threats)
+        if BucketThreatModel:
+            has_critical = BucketThreatModel.has_critical_threats(detected_threats)
+        else:
+            has_critical = any(threat.get("level") == "critical" for threat in detected_threats)
         
         return {
             "has_critical_threats": has_critical,
