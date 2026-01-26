@@ -15,10 +15,10 @@ class AuditMiddleware:
     
     def __init__(self, db=None):
         """Initialize audit middleware with optional MongoDB connection"""
-        self.audit_collection = db.audit_logs if db else None
+        self.audit_collection = db.audit_logs if db is not None else None
         self.in_memory_audit = []  # Fallback if MongoDB unavailable
         
-        if self.audit_collection:
+        if self.audit_collection is not None:
             logger.info("Audit middleware initialized with MongoDB")
         else:
             logger.warning("Audit middleware using in-memory fallback (not persistent)")

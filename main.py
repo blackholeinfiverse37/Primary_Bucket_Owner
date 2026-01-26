@@ -96,6 +96,9 @@ from governance.owner_principles import (
 )
 from governance.governance_gate import governance_gate, GovernanceDecision
 from middleware.audit_middleware import AuditMiddleware
+from middleware.constitutional.core_boundary_enforcer import core_boundary_enforcer, CoreCapability, ProhibitedAction
+from validators.core_api_contract import core_api_contract, InputChannel, OutputChannel
+from handlers.core_violation_handler import core_violation_handler, ViolationSeverity
 
 logger = get_logger(__name__)
 execution_logger = get_execution_logger()
@@ -127,7 +130,7 @@ redis_service = RedisService()
 sio = socketio.AsyncClient()
 
 # Initialize audit middleware
-audit_middleware = AuditMiddleware(mongo_client.db if mongo_client else None)
+audit_middleware = AuditMiddleware(mongo_client.db if mongo_client is not None and mongo_client.db is not None else None)
 
 # Redis client setup
 redis_client = None
@@ -243,13 +246,15 @@ async def health_check():
             "gate_active": True,
             "approved_integrations": len(governance_gate.approved_integrations),
             "certification": "enterprise_ready",
-            "certification_date": "2026-01-19"
+            "certification_date": "2026-01-19",
+            "constitutional_governance": "active"
         },
         "services": {
             "mongodb": "connected" if mongo_client and mongo_client.db is not None else "disconnected",
             "socketio": "disabled",
             "redis": "connected" if redis_service.is_connected() else "disconnected",
-            "audit_middleware": "active" if audit_middleware.audit_collection is not None else "inactive"
+            "audit_middleware": "active" if audit_middleware.audit_collection is not None else "inactive",
+            "constitutional_enforcement": "active"
         }
     }
 
@@ -2070,6 +2075,216 @@ async def get_threat_certification_status():
         "bucket_owner": "Ashmit_Pandey",
         "status": "CERTIFIED_FOR_PRODUCTION",
         "reference": "docs/14_bucket_threat_model.md"
+    }
+
+# ============================================================================
+# CONSTITUTIONAL GOVERNANCE ENDPOINTS (Core-Bucket Boundaries)
+# ============================================================================
+
+@app.post("/constitutional/core/validate-request")
+async def validate_core_request(
+    requester_id: str = Query(..., description="ID of requesting system (must be bhiv_core)"),
+    operation_type: str = Query(..., description="Operation type (READ/WRITE/QUERY/etc)"),
+    target_resource: str = Query(..., description="Resource being accessed"),
+    request_data: Dict = None,
+    context: Optional[Dict] = None
+):
+    """
+    Validate Core request against constitutional boundaries
+    Enforces sovereignty and prevents unauthorized operations
+    """
+    if not request_data:
+        raise HTTPException(status_code=400, detail="request_data required")
+    
+    validation_result = core_boundary_enforcer.validate_request(
+        requester_id=requester_id,
+        operation_type=operation_type,
+        target_resource=target_resource,
+        request_data=request_data,
+        context=context or {}
+    )
+    
+    if not validation_result["allowed"]:
+        for violation in validation_result["violations"]:
+            core_violation_handler.handle_violation(
+                violation_type=violation["type"],
+                severity=violation["severity"],
+                details=violation,
+                requester_id=requester_id,
+                context={"operation": operation_type, "resource": target_resource}
+            )
+        
+        raise HTTPException(status_code=403, detail={
+            "message": "Request violates constitutional boundaries",
+            "violations": validation_result["violations"],
+            "allowed": False
+        })
+    
+    return {
+        "allowed": True,
+        "message": "Request validated successfully",
+        "validation_result": validation_result
+    }
+
+@app.post("/constitutional/core/validate-input")
+async def validate_core_input(
+    channel: str = Query(..., description="Input channel (artifact_write/metadata_query/etc)"),
+    requester_id: str = Query(..., description="ID of requesting system"),
+    data: Dict = None
+):
+    """
+    Validate Core input against API contract
+    Ensures data format compliance
+    """
+    if not data:
+        raise HTTPException(status_code=400, detail="data required")
+    
+    validation_result = core_api_contract.validate_input(
+        channel=channel,
+        data=data,
+        requester_id=requester_id
+    )
+    
+    if not validation_result["valid"]:
+        raise HTTPException(status_code=400, detail={
+            "message": "Input validation failed",
+            "violations": validation_result["violations"]
+        })
+    
+    return {
+        "valid": True,
+        "message": "Input validated successfully",
+        "channel": channel
+    }
+
+@app.post("/constitutional/core/validate-output")
+async def validate_core_output(
+    channel: str = Query(..., description="Output channel (artifact_read/query_result/etc)"),
+    data: Dict = None
+):
+    """
+    Validate Bucket output to Core against API contract
+    Ensures response format compliance
+    """
+    if not data:
+        raise HTTPException(status_code=400, detail="data required")
+    
+    validation_result = core_api_contract.validate_output(
+        channel=channel,
+        data=data
+    )
+    
+    if not validation_result["valid"]:
+        raise HTTPException(status_code=400, detail={
+            "message": "Output validation failed",
+            "violations": validation_result["violations"]
+        })
+    
+    return {
+        "valid": True,
+        "message": "Output validated successfully",
+        "channel": channel
+    }
+
+@app.get("/constitutional/core/capabilities")
+async def get_core_capabilities():
+    """
+    Get allowed Core capabilities
+    Returns list of operations Core is authorized to perform
+    """
+    return {
+        "allowed_capabilities": [cap.value for cap in CoreCapability],
+        "prohibited_actions": [action.value for action in ProhibitedAction],
+        "description": "Constitutional boundaries between Core and Bucket",
+        "enforcement": "automatic",
+        "reference": "docs/constitutional/BHIV_CORE_BUCKET_BOUNDARIES.md"
+    }
+
+@app.get("/constitutional/core/contract")
+async def get_core_contract():
+    """
+    Get complete Core-Bucket API contract
+    Returns input/output channels and schemas
+    """
+    return core_api_contract.get_contract_documentation()
+
+@app.get("/constitutional/violations/summary")
+async def get_violations_summary(
+    hours: int = Query(24, ge=1, le=168, description="Hours to look back")
+):
+    """
+    Get summary of boundary violations
+    Returns violation statistics and trends
+    """
+    boundary_summary = core_boundary_enforcer.get_violation_summary(hours)
+    handler_report = core_violation_handler.get_violation_report(hours)
+    
+    return {
+        "period_hours": hours,
+        "boundary_violations": boundary_summary,
+        "detailed_report": handler_report,
+        "status": "critical" if boundary_summary["critical_count"] > 0 else "normal"
+    }
+
+@app.get("/constitutional/violations/report")
+async def get_violations_report(
+    hours: int = Query(24, ge=1, le=168, description="Hours to look back")
+):
+    """
+    Get detailed violation report
+    Includes escalations, responses, and trends
+    """
+    return core_violation_handler.get_violation_report(hours)
+
+@app.post("/constitutional/violations/handle")
+async def handle_violation_manually(
+    violation_type: str = Query(..., description="Type of violation"),
+    severity: str = Query(..., description="Severity (low/medium/high/critical)"),
+    requester_id: str = Query(..., description="ID of violating system"),
+    details: Dict = None,
+    context: Optional[Dict] = None
+):
+    """
+    Manually report and handle a boundary violation
+    Used for violations detected outside automated checks
+    """
+    if not details:
+        raise HTTPException(status_code=400, detail="details required")
+    
+    response = core_violation_handler.handle_violation(
+        violation_type=violation_type,
+        severity=severity,
+        details=details,
+        requester_id=requester_id,
+        context=context or {}
+    )
+    
+    return {
+        "success": True,
+        "violation_handled": response,
+        "message": "Violation logged and escalated as appropriate"
+    }
+
+@app.get("/constitutional/status")
+async def get_constitutional_status():
+    """
+    Get overall constitutional governance status
+    Returns health of boundary enforcement system
+    """
+    recent_violations = core_boundary_enforcer.get_violation_summary(24)
+    
+    return {
+        "status": "active",
+        "enforcement": "enabled",
+        "boundaries_locked": True,
+        "recent_violations_24h": recent_violations["total_violations"],
+        "critical_violations_24h": recent_violations["critical_count"],
+        "allowed_capabilities": len([cap for cap in CoreCapability]),
+        "prohibited_actions": len([action for action in ProhibitedAction]),
+        "input_channels": len([ch for ch in InputChannel]),
+        "output_channels": len([ch for ch in OutputChannel]),
+        "certification": "constitutional_governance_active",
+        "reference": "docs/constitutional/"
     }
 
 # Law Agent Endpoints
